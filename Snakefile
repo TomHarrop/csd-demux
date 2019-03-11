@@ -65,12 +65,39 @@ for dirpath, dirnames, filenames in os.walk(read_dir):
 #         '> {output} '
 #         '2> {log}'
 
+rule manual_demultiplex_guppy_results:
+    input:
+        guppy_results = 'output/035_guppy-manual-demux/barcoding_summary_filtered.txt',
+        filtered_reads = 'output/010_raw/filtered_reads.fastq'
+    output:
+        expand('output/035_guppy-manual-demux/BC{bc}.fastq',
+               bc=[f'{i:02}' for i in range(1, 97)])
+    params:
+        outdir = 'output/035_guppy-manual-demux'
+    threads:
+        50
+    script:
+        'src/manual_demultiplex_guppy_results.py'
+
+rule filter_guppy_results:
+    input:
+        guppy_results = 'output/030_guppy-barcoder/barcoding_summary.txt',
+    output:
+        guppy_results = 'output/035_guppy-manual-demux/barcoding_summary_filtered.txt'
+    log:
+        'output/000_logs/035_filter_guppy_results.log'
+    threads:
+        1
+    singularity:
+        r_container
+    script:
+        'src/filter_guppy_results.R'
 
 rule guppy_demux:
     input:
         read_dir
     output:
-        directory('output/030_guppy-barcoder')
+        'output/030_guppy-barcoder/barcoding_summary.txt'
     log:
         'output/000_logs/030_guppy-barcoder.log'
     threads:
