@@ -4,6 +4,7 @@ from Bio import SeqIO
 from functools import partial
 from multiprocessing import Pool
 import pandas
+import pathlib2
 
 #############
 # FUNCTIONS #
@@ -33,8 +34,10 @@ def write_fastq_from_row(
         seq_index,
         guppy_filtered,
         outdir):
-    print('Working on {}'.format(row['barcode_front_bc']))
     my_filename = '{0}/{1}.fastq'.format(outdir, row['barcode_front_bc'])
+    print('Demultiplexing {0} reads to {1}'.format(
+        row['barcode_front_bc'],
+        my_filename))
     my_readlist = row[0]
     with open(my_filename, 'wt') as f:
         for rec in my_readlist:
@@ -58,7 +61,7 @@ def write_fastq_from_row(
 
 reads = snakemake.input['filtered_reads']
 guppy_summary = snakemake.input['guppy_results']
-outdir = snakemake.params['outdir']
+outdir = snakemake.output['outdir']
 threads = snakemake.threads
 
 ########
@@ -67,6 +70,11 @@ threads = snakemake.threads
 
 
 def main():
+    # check for the output directory
+    with pathlib2.Path(outdir) as p:
+        if not p.is_dir():
+            p.mkdir(parents=True)
+
     # index the fastq. 
     # have to read the whole thing into memory if we want to serialize it.
     seq_index = SeqIO.to_dict(SeqIO.parse(reads, 'fastq'))

@@ -65,15 +65,44 @@ for dirpath, dirnames, filenames in os.walk(read_dir):
 #         '> {output} '
 #         '2> {log}'
 
-rule manual_demultiplex_guppy_results:
+def aggregate_input(wildcards):
+    checkpoint_output = checkpoints.manual_demultiplex_guppy_results.get(
+        **wildcards).output[0]
+    return expand('output/040_stats/BC{bc}_readlength.txt',
+                  bc=glob_wildcards(
+                    os.path.join(checkpoint_output, "BC{bc}.fastq")).i)
+
+
+rule target:
+    input:
+        # expand('output/040_stats/BC{bc}_readlength.txt',
+        #        bc=[f'{i:02}' for i in range(1, 97)]),
+        aggregate_input
+
+rule demultiplex_stats:
+    input:
+        'output/035_guppy-manual-demux/demuxed/BC{bc}.fastq'
+    output:
+        'output/040_stats/BC{bc}_readlength.txt'
+    log:
+        'output/000_logs/040_stats/BC{bc}_readlength.log'
+    threads:
+        1
+    singularity:
+        bbduk_container
+    shell:
+        'readlength.sh '
+        'in={input} '
+        'out={output} '
+        'binsize=50 '
+        '2> {log}'
+
+checkpoint manual_demultiplex_guppy_results:
     input:
         guppy_results = 'output/035_guppy-manual-demux/barcoding_summary_filtered.txt',
         filtered_reads = 'output/010_raw/filtered_reads.fastq'
     output:
-        expand('output/035_guppy-manual-demux/BC{bc}.fastq',
-               bc=[f'{i:02}' for i in range(1, 97)])
-    params:
-        outdir = 'output/035_guppy-manual-demux'
+        outdir = directory('output/035_guppy-manual-demux/demuxed')
     threads:
         50
     script:
