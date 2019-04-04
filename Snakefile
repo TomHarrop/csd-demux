@@ -2,11 +2,22 @@
 
 import os
 import pathlib2
+import multiprocessing
 
 
 #############
 # FUNCTIONS #
 #############
+
+# function for checking which samples were demuxed
+def aggregate_input(wildcards):
+    print(wildcards)
+    checkpoint_output = checkpoints.manual_demultiplex_guppy_results.get(
+        **wildcards).output['outdir']
+    return expand('output/050_mapped/BC{bc}_sorted.bam',
+                  bc=glob_wildcards(
+                    os.path.join(checkpoint_output, "barcode{bc}.fastq")).bc)
+
 
 def resolve_path(x):
     return str(pathlib2.Path(x).resolve())
@@ -17,7 +28,9 @@ def resolve_path(x):
 ###########
 
 barcodes = 'data/EXP-PBC096_barcodes.fasta'
-read_dir = 'data/raw'
+read_dir = 'data/raw2'
+honeybee_ref = 'data/GCF_003254395.2_Amel_HAv3.1_genomic.fna'
+csd_chrom = "NC_037640.1"
 
 # containers
 r_container = 'shub://TomHarrop/singularity-containers:r_3.5.1'
@@ -26,7 +39,12 @@ minimap_container = 'shub://TomHarrop/singularity-containers:minimap2_2.11r797'
 pigz_container = 'shub://TomHarrop/singularity-containers:pigz_2.4.0'
 bwa_container = 'shub://TomHarrop/singularity-containers:bwa_0.7.17'
 bbduk_container = 'shub://TomHarrop/singularity-containers:bbmap_38.00'
-guppy_container = 'shub://TomHarrop/singularity-containers:guppy_2.3.5'
+guppy_container = 'shub://TomHarrop/singularity-containers:guppy_2.3.7'
+sambamba_container = 'shub://TomHarrop/singularity-containers:sambamba_0.6.8'
+freebayes_container = 'shub://TomHarrop/singularity-containers:freebayes_1.2.0'
+vcflib_container = 'shub://TomHarrop/singularity-containers:vcflib_1.0.0-rc2'
+minionqc_container = 'shub://TomHarrop/singularity-containers:minionqc_1.4.1'
+
 
 ########
 # MAIN #
@@ -43,45 +61,160 @@ for dirpath, dirnames, filenames in os.walk(read_dir):
 # RULES #
 #########
 
-# rule map_to_barcodes:
-#     input:
-#         filtered_reads = 'output/010_raw/filtered_reads.fastq',
-#         barcodes = barcodes
-#     output:
-#         'output/020_mapped/aln.sam'
-#     log:
-#         'output/000_logs/020_map_to_barcodes.log'
-#     threads:
-#         50
-#     singularity:
-#         minimap_container
-#     shell:
-#         'minimap2 '
-#         '-t {threads} '
-#         '-ax map-ont '
-#         '-N 1 '
-#         '{input.barcodes} '
-#         '{input.filtered_reads} '
-#         '> {output} '
-#         '2> {log}'
-
-def aggregate_input(wildcards):
-    checkpoint_output = checkpoints.manual_demultiplex_guppy_results.get(
-        **wildcards).output[0]
-    return expand('output/040_stats/BC{bc}_readlength.txt',
-                  bc=glob_wildcards(
-                    os.path.join(checkpoint_output, "BC{bc}.fastq")).i)
-
-
 rule target:
     input:
-        # expand('output/040_stats/BC{bc}_readlength.txt',
-        #        bc=[f'{i:02}' for i in range(1, 97)]),
-        aggregate_input
+        'output/015_minionqc',
+        'output/060_freebayes/long_haplotypes.vcf'
 
+rule extract_csd_chrom:
+    input:
+        vcf = 'output/060_freebayes/variants.vcf'
+    output:
+        'output/060_freebayes/variants_csd_chrom.vcf'
+    shell:
+        'grep "^#" {input.vcf} > {output} ; '
+        'grep {csd_chrom} {input.vcf} >> {output}'
+
+
+rule freebayes_lr:
+    input:
+        bam = aggregate_input,
+        vcf = 'output/060_freebayes/variants_filtered.vcf',
+        fa = honeybee_ref
+    output:
+        bg = 'output/060_freebayes/variants_filtered.vcf.gz',
+        index = 'output/060_freebayes/variants_filtered.vcf.gz.tbi',
+        vcf = 'output/060_freebayes/long_haplotypes.vcf'
+    params:
+        haplotype_length = '10'
+    log:
+        'output/000_logs/060_freebayes/freebayes.log'
+    singularity:
+        freebayes_container
+    shell:
+        'bgzip --force --stdout {input.vcf} > {output.bg} ; '
+        'tabix -p vcf {output.bg} ; '
+        'freebayes '
+        '-f {input.fa} '
+        '--haplotype-length {params.haplotype_length} '
+        '--haplotype-basis-alleles {output.bg} '
+        '{input.bam} '
+        '> {output.vcf} '
+        '2> {log}'
+
+
+rule filter_vcf:
+    input:
+        'output/060_freebayes/variants.vcf'
+    output:
+        'output/060_freebayes/variants_filtered.vcf'
+    params:
+        filter = "QUAL > 20"
+    log:
+        'output/000_logs/060_freebayes/freebayes_filter.log'
+    singularity:
+        vcflib_container
+    shell:
+        'vcffilter -f "{params.filter}" {input} > {output} 2> {log}'
+
+
+rule freebayes:
+    input:
+        bam = aggregate_input,
+        fa = honeybee_ref
+    output:
+        vcf = 'output/060_freebayes/variants.vcf'
+    log:
+        'output/000_logs/060_freebayes/freebayes.log'
+    singularity:
+        freebayes_container
+    shell:
+        'freebayes '
+        '--region NC_037640.1:11771679-11781139 '
+        '-f {input.fa} '
+        '{input.bam} '
+        '> {output} '
+        '2> {log}'
+
+
+rule sort:
+    input:
+        'output/050_mapped/BC{bc}.sam'
+    output:
+        bam = 'output/050_mapped/BC{bc}_sorted.bam'
+    log:
+        'output/000_logs/050_mapped/{bc}_sort.log'
+    threads:
+        1
+    singularity:
+        sambamba_container
+    shell:
+        'sambamba view '
+        '{input} '
+        '-f "bam" '
+        '--sam-input '
+        '-l 0 '
+        '2> {log} '
+        '| '
+        'sambamba sort '
+        '-o {output.bam} '
+        '-l 9 '
+        '-t {threads} '
+        '/dev/stdin '
+        '2>> {log} '
+        '; '
+        'sambamba index '
+        '{output.bam} '
+        '2>> {log}'
+
+rule map_to_csd:
+    input:
+        fq = 'output/035_guppy-manual-demux/demuxed/barcode{bc}.fastq',
+        ref = 'output/010_raw/honeybee_ref.mmi'
+    output:
+        temp('output/050_mapped/BC{bc}.sam')
+    params:
+        rg = '\'@RG\\tID:BC{bc}\\tSM:BC{bc}\''
+    log:
+        'output/000_logs/050_mapped/{bc}.log'
+    threads:
+        1
+    singularity:
+        minimap_container
+    shell:
+        'minimap2 '
+        '-t {threads} '
+        '-ax map-ont '
+        '-N 1 '
+        '-R {params.rg} '
+        '{input.ref} '
+        '{input.fq} '
+        '> {output} '
+        '2> {log}'
+
+rule prepare_ref:
+    input:
+        honeybee_ref
+    output:
+        'output/010_raw/honeybee_ref.mmi'
+    log:
+        'output/000_logs/010_raw/prepare_ref.log'
+    threads:
+        3
+    singularity:
+        minimap_container
+    shell:
+        'minimap2 '
+        '-x map-ont '
+        '-d {output} '
+        '{input} '
+        '2> {log}'
+
+
+# everything from here on is testing
 rule demultiplex_stats:
     input:
-        'output/035_guppy-manual-demux/demuxed/BC{bc}.fastq'
+        'output/035_guppy-manual-demux/demuxed/barcode{bc}.fastq'
     output:
         'output/040_stats/BC{bc}_readlength.txt'
     log:
@@ -104,7 +237,7 @@ checkpoint manual_demultiplex_guppy_results:
     output:
         outdir = directory('output/035_guppy-manual-demux/demuxed')
     threads:
-        50
+        multiprocessing.cpu_count()
     script:
         'src/manual_demultiplex_guppy_results.py'
 
@@ -129,15 +262,17 @@ rule guppy_demux:
         'output/030_guppy-barcoder/barcoding_summary.txt'
     log:
         'output/000_logs/030_guppy-barcoder.log'
+    params:
+        outdir = 'output/030_guppy-barcoder'
     threads:
-        50
+        multiprocessing.cpu_count()
     singularity:
         guppy_container
     shell:
         'guppy_barcoder '
         '-t {threads} '
         '-i {input} '
-        '-s {output} '
+        '-s {params.outdir} '
         '--barcode_kits "EXP-PBC096" '
         '&> {log}'
 
@@ -160,7 +295,7 @@ rule map_to_barcodes:
     log:
         'output/000_logs/020_map_to_barcodes.log'
     threads:
-        50
+        multiprocessing.cpu_count()
     singularity:
         last_container
     shell:
@@ -219,4 +354,23 @@ rule combine_reads:
     shell:
         'cat {input} > {output}'
 
+
+rule minionqc:
+    input:
+        str(pathlib2.Path(read_dir, 'sequencing_summary.txt'))
+    output:
+        directory('output/015_minionqc')
+    threads:
+        1
+    priority:
+        1
+    singularity:
+        minionqc_container
+    log:
+        'output/000_logs/015_minionqc.log'
+    shell:
+        'MinIONQC.R '
+        '--input={input} '
+        '--outputdirectory={output} '
+        '&> {log}'
 

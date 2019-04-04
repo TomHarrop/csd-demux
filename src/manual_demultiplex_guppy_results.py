@@ -34,9 +34,9 @@ def write_fastq_from_row(
         seq_index,
         guppy_filtered,
         outdir):
-    my_filename = '{0}/{1}.fastq'.format(outdir, row['barcode_front_bc'])
+    my_filename = '{0}/{1}.fastq'.format(outdir, row['barcode_arrangement'])
     print('Demultiplexing {0} reads to {1}'.format(
-        row['barcode_front_bc'],
+        row['barcode_arrangement'],
         my_filename))
     my_readlist = row[0]
     with open(my_filename, 'wt') as f:
@@ -83,7 +83,7 @@ def main():
     guppy_filtered = pandas.read_csv(guppy_summary, sep='\s+')
 
     # group by barcode
-    matched_bc_grouped = guppy_filtered.groupby('barcode_front_bc')
+    matched_bc_grouped = guppy_filtered.groupby('barcode_arrangement')
 
     # extract the read IDs in each group
     reads_by_bc = matched_bc_grouped.apply(
