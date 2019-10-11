@@ -44,7 +44,7 @@ sambamba_container = 'shub://TomHarrop/singularity-containers:sambamba_0.6.8'
 freebayes_container = 'shub://TomHarrop/singularity-containers:freebayes_1.2.0'
 vcflib_container = 'shub://TomHarrop/singularity-containers:vcflib_1.0.0-rc2'
 minionqc_container = 'shub://TomHarrop/singularity-containers:minionqc_1.4.1'
-
+qcat_container = 'shub://TomHarrop/singularity-containers:qcat_1.0.1'
 
 ########
 # MAIN #
@@ -345,6 +345,33 @@ rule filter_reads:
         'include=t '
         'out={output.filtered_reads} '
         '&> {log}'
+
+rule qcat:
+    input:
+        all_reads = 'output/010_raw/all_reads.fastq'
+    output:
+        bc_dir = directory('output/037_qcat/demuxed'),
+        tsv = 'output/037_qcat/barcodes.tsv'
+    log:
+        'output/000_logs/037_qcat.log'
+    threads:
+        multiprocessing.cpu_count()
+        # 1
+    singularity:
+        qcat_container
+    shell:
+        'qcat '
+        '--fastq {input.all_reads} '
+        '--barcode_dir {output.bc_dir} '
+        '--detect-middle '
+        '--threads {threads} '
+        # '--tsv '
+        '--trim '
+        '--kit PBC096 '
+        '--guppy '
+        # '--epi2me '
+        '> {output.tsv} '
+        '2> {log}'
 
 rule combine_reads:
     input:
